@@ -26,10 +26,10 @@ PLAY_TEMPLATE_FILE = APP_DIR / "play_button.png"
 # A little padding is included so template matching also sees its border.
 PLAY_BOX = (0.585, 0.817, 0.915, 0.960)  # left, top, right, bottom
 MATCH_THRESHOLD = 0.72
-CHECK_INTERVAL = 0.10
-CLICK_COOLDOWN = 3.0
+CHECK_INTERVAL = 0.5
+CLICK_COOLDOWN = 0.5
 GAME_CLICK_INTERVAL = 0.5
-ESC_HOLD_SECONDS = 1.0
+ESC_HOLD_SECONDS = 0.5
 
 pyautogui.FAILSAFE = True
 
@@ -175,36 +175,6 @@ def has_fast_start_icon(frame: np.ndarray) -> bool:
     return False
 
 
-def has_mystery_box_icon(frame: np.ndarray) -> bool:
-    """Detect the brown square question box shown near the screen centre."""
-    height, width = frame.shape[:2]
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    brown = cv2.inRange(hsv, np.array([4, 75, 45]), np.array([30, 255, 255]))
-    light_mark = cv2.inRange(hsv, np.array([0, 0, 155]), np.array([35, 145, 255]))
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    brown = cv2.morphologyEx(brown, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(brown, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    for contour in contours:
-        x, y, w, h = cv2.boundingRect(contour)
-        centre_x = x + w / 2
-        centre_y = y + h / 2
-        aspect = w / max(h, 1)
-        fill_ratio = cv2.contourArea(contour) / max(float(w * h), 1.0)
-        mark_ratio = cv2.countNonZero(light_mark[y:y + h, x:x + w]) / max(float(w * h), 1.0)
-        if (
-            width * 0.30 < centre_x < width * 0.70
-            and height * 0.18 < centre_y < height * 0.76
-            and width * 0.035 < w < width * 0.20
-            and height * 0.055 < h < height * 0.30
-            and 0.68 < aspect < 1.38
-            and fill_ratio > 0.48
-            and mark_ratio > 0.012
-        ):
-            return True
-    return False
-
-
 def find_result_ok(frame: np.ndarray) -> tuple[bool, tuple[int, int]]:
     """Detect the bright Result dialog and return its green OK button centre."""
     height, width = frame.shape[:2]
@@ -308,7 +278,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     if template is None:
         raise SystemExit("Play template is missing. Run: python auto_run.py --reset")
 
-    print("Watching for the Play screen. Hold ESC for 1 second to stop.")
+    print("Watching for the Play screen. Hold ESC for 0.5 seconds to stop.")
     last_click = 0.0
     game_clicking = False
     mystery_opened = False
@@ -319,7 +289,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             if esc_started is None:
                 esc_started = time.monotonic()
             elif time.monotonic() - esc_started >= ESC_HOLD_SECONDS:
-                print("ESC held for 1 second; stopping.")
+                print("ESC held for 0.5 seconds; stopping.")
                 break
         else:
             esc_started = None
@@ -330,7 +300,6 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         open_all_found, open_all_centre = find_open_all(frame)
         pause_found = has_pause_icon(frame)
         fast_start_found = has_fast_start_icon(frame)
-        mystery_box_found = has_mystery_box_icon(frame)
         now = time.monotonic()
 
         if result_found:
@@ -356,12 +325,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
                 last_click = now
                 mystery_opened = True
         else:
-            if mystery_box_found:
-                if game_clicking:
-                    print("Mystery Box icon found; stopping W-key mode.")
-                game_clicking = False
-                fast_start_active = False
-            elif fast_start_found:
+            if fast_start_found:
                 game_clicking = False
                 if not fast_start_active:
                     screen_x = region[0] + region[2] // 2
@@ -401,8 +365,6 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             elif open_all_found:
                 action_name = "Confirm" if mystery_opened else "Open all"
                 mode = f"MYSTERY BOX: clicking {action_name}"
-            elif mystery_box_found:
-                mode = "MYSTERY BOX ICON: W stopped"
             elif fast_start_found:
                 mode = "FAST START: clicking centre"
             elif game_clicking:
