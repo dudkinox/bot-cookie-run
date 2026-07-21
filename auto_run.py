@@ -120,14 +120,43 @@ def find_green_play(frame: np.ndarray) -> tuple[float, tuple[int, int]]:
     return max(candidates, default=(0.0, (0, 0)), key=lambda item: item[0])
 
 
-def is_fast_start_screen(frame: np.ndarray) -> bool:
-    """Detect the square green Fast Start boost shown at the start of a run."""
+def has_pause_icon(frame: np.ndarray) -> bool:
+    """Detect the round grey Pause control at the top-right during gameplay."""
     height, width = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array([32, 65, 65]), np.array([92, 255, 255]))
+
+    # Keep bright, nearly grey UI pixels. The home-screen gear is cyan and is
+    # therefore excluded by the low-saturation limit.
+    grey = cv2.inRange(hsv, np.array([0, 0, 105]), np.array([179, 72, 255]))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    grey = cv2.morphologyEx(grey, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(grey, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        aspect = w / max(h, 1)
+        area = cv2.contourArea(contour)
+        fill_ratio = area / max(float(w * h), 1.0)
+        if (
+            x > width * 0.88
+            and y < height * 0.12
+            and width * 0.028 < w < width * 0.080
+            and height * 0.045 < h < height * 0.130
+            and 0.72 < aspect < 1.30
+            and fill_ratio > 0.48
+        ):
+            return True
+    return False
+
+
+def has_fast_start_icon(frame: np.ndarray) -> bool:
+    """Detect the square green Fast Start icon near the screen centre."""
+    height, width = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([30, 55, 65]), np.array([95, 255, 255]))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    green = cv2.morphologyEx(green, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     for contour in contours:
         x, y, w, h = cv2.boundingRect(contour)
@@ -136,11 +165,41 @@ def is_fast_start_screen(frame: np.ndarray) -> bool:
         aspect = w / max(h, 1)
         if (
             width * 0.38 < centre_x < width * 0.62
-            and height * 0.34 < centre_y < height * 0.62
-            and width * 0.08 < w < width * 0.22
-            and height * 0.12 < h < height * 0.30
-            and 0.70 < aspect < 1.35
-            and cv2.contourArea(contour) > width * height * 0.006
+            and height * 0.32 < centre_y < height * 0.64
+            and width * 0.075 < w < width * 0.22
+            and height * 0.11 < h < height * 0.31
+            and 0.68 < aspect < 1.38
+            and cv2.contourArea(contour) > width * height * 0.005
+        ):
+            return True
+    return False
+
+
+def has_mystery_box_icon(frame: np.ndarray) -> bool:
+    """Detect the brown square question box shown near the screen centre."""
+    height, width = frame.shape[:2]
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    brown = cv2.inRange(hsv, np.array([4, 75, 45]), np.array([30, 255, 255]))
+    light_mark = cv2.inRange(hsv, np.array([0, 0, 155]), np.array([35, 145, 255]))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+    brown = cv2.morphologyEx(brown, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(brown, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        centre_x = x + w / 2
+        centre_y = y + h / 2
+        aspect = w / max(h, 1)
+        fill_ratio = cv2.contourArea(contour) / max(float(w * h), 1.0)
+        mark_ratio = cv2.countNonZero(light_mark[y:y + h, x:x + w]) / max(float(w * h), 1.0)
+        if (
+            width * 0.30 < centre_x < width * 0.70
+            and height * 0.18 < centre_y < height * 0.76
+            and width * 0.035 < w < width * 0.20
+            and height * 0.055 < h < height * 0.30
+            and 0.68 < aspect < 1.38
+            and fill_ratio > 0.48
+            and mark_ratio > 0.012
         ):
             return True
     return False
@@ -253,6 +312,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     last_click = 0.0
     game_clicking = False
     mystery_opened = False
+    fast_start_active = False
     esc_started: float | None = None
     while True:
         if keyboard.is_pressed("esc"):
@@ -268,13 +328,17 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         score, centre, detector = find_play(frame, template)
         result_found, ok_centre = find_result_ok(frame)
         open_all_found, open_all_centre = find_open_all(frame)
+        pause_found = has_pause_icon(frame)
+        fast_start_found = has_fast_start_icon(frame)
+        mystery_box_found = has_mystery_box_icon(frame)
         now = time.monotonic()
 
         if result_found:
             if game_clicking:
-                print("Result screen found; stopping centre-click mode.")
+                print("Result screen found; stopping W-key mode.")
             game_clicking = False
             mystery_opened = False
+            fast_start_active = False
             if now - last_click >= CLICK_COOLDOWN:
                 screen_x = region[0] + ok_centre[0]
                 screen_y = region[1] + ok_centre[1]
@@ -292,19 +356,34 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
                 last_click = now
                 mystery_opened = True
         else:
-            if game_clicking and score >= MATCH_THRESHOLD:
+            if mystery_box_found:
+                if game_clicking:
+                    print("Mystery Box icon found; stopping W-key mode.")
                 game_clicking = False
-                print("Play screen returned; stopping centre-click mode.")
-
-            if not game_clicking and is_fast_start_screen(frame):
+                fast_start_active = False
+            elif fast_start_found:
+                game_clicking = False
+                if not fast_start_active:
+                    screen_x = region[0] + region[2] // 2
+                    screen_y = region[1] + region[3] // 2
+                    print(f"Fast Start found; clicking centre at {screen_x}, {screen_y}")
+                    pyautogui.click(screen_x, screen_y)
+                    last_click = now
+                fast_start_active = True
+            elif pause_found and not game_clicking:
+                fast_start_active = False
                 game_clicking = True
                 last_click = 0.0
-                print("Fast Start screen found; clicking the game centre every 0.5 seconds.")
+                print("Pause icon found; pressing W every 0.5 seconds.")
+            elif not pause_found and game_clicking:
+                fast_start_active = False
+                game_clicking = False
+                print("Pause icon disappeared; stopping W-key mode.")
+            elif not fast_start_found:
+                fast_start_active = False
 
             if game_clicking and now - last_click >= GAME_CLICK_INTERVAL:
-                screen_x = region[0] + region[2] // 2
-                screen_y = region[1] + region[3] // 2
-                pyautogui.click(screen_x, screen_y)
+                pyautogui.press("w")
                 last_click = now
             elif score >= MATCH_THRESHOLD and now - last_click >= CLICK_COOLDOWN:
                 print(
@@ -316,14 +395,18 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
 
         if show_preview:
             preview = frame.copy()
-            color = (0, 255, 0) if score >= MATCH_THRESHOLD else (0, 0, 255)
+            color = (0, 255, 0) if (game_clicking or score >= MATCH_THRESHOLD) else (0, 0, 255)
             if result_found:
                 mode = "RESULT: clicking OK"
             elif open_all_found:
                 action_name = "Confirm" if mystery_opened else "Open all"
                 mode = f"MYSTERY BOX: clicking {action_name}"
+            elif mystery_box_found:
+                mode = "MYSTERY BOX ICON: W stopped"
+            elif fast_start_found:
+                mode = "FAST START: clicking centre"
             elif game_clicking:
-                mode = "CENTRE CLICK 0.5s"
+                mode = "PRESS W 0.5s"
             else:
                 mode = f"Play match: {score:.2f}"
             cv2.putText(
