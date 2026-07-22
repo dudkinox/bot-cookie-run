@@ -491,8 +491,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         open_all_found, open_all_centre = find_open_all(frame)
         pause_found = has_pause_icon(frame)
         gameplay_heart_found = has_gameplay_heart_icon(frame)
-        centre_boost_found = has_fast_start_icon(frame)
-        fast_start_found = gameplay_heart_found and centre_boost_found
+        fast_start_found = False  # Centre-click Boost handling is disabled.
         home_play_screen = home_play_screen_visible(frame)
         boost_upgrade_screen = boost_upgrade_screen_visible(frame)
         random_boost_screen = random_boost_screen_visible(frame)
@@ -501,26 +500,15 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         coins_ready = coin_screen and double_coins_visible(frame)
         now = time.monotonic()
 
-        # Gameplay has priority over every menu/result detector. Handle a
-        # centre Boost card first; otherwise the heart icon alone enables W.
+        # Gameplay has priority over every menu/result detector. Space is
+        # mapped to the centre tap and handles gameplay and Boost screens.
         if (
-            VERIFY_THROUGH_STEP >= 6
-            and fast_start_found
-            and now - last_click >= CLICK_COOLDOWN
-        ):
-            screen_x = region[0] + region[2] // 2
-            screen_y = region[1] + region[3] // 2
-            print(f"Start/Relay Boost found; clicking centre at {screen_x}, {screen_y}")
-            pyautogui.click(screen_x, screen_y)
-            last_click = now
-        elif (
             VERIFY_THROUGH_STEP >= 7
             and gameplay_heart_found
-            and not centre_boost_found
             and now - last_click >= GAME_CLICK_INTERVAL
         ):
-            print("Gameplay heart found; pressing W")
-            pyautogui.press("w")
+            print("Gameplay heart found; pressing Space")
+            pyautogui.press("space")
             last_click = now
         elif home_play_screen:
             game_clicking = False
