@@ -30,13 +30,13 @@ CHECK_INTERVAL = 0.5
 CLICK_COOLDOWN = 1.0
 GAME_CLICK_INTERVAL = 0.5
 ESC_HOLD_SECONDS = 0.5
-COIN_PLAY_DELAY_SECONDS = 1.0
+COIN_PLAY_DELAY_SECONDS = 3.0
 
 # Verify one action at a time. Increase this only after each step is confirmed.
 # 1 = main S, 2 = D on Upgrade, 3 = A on Random Boost,
 # 4 = D on Multi-Buy, 5 = S with Double Coins, 6 = Boost click,
-# 7 = press W throughout gameplay, 8 = D on Result.
-VERIFY_THROUGH_STEP = 8
+# 7 = gameplay Space, 8 = D on Result, 9 = D on Mystery Box.
+VERIFY_THROUGH_STEP = 9
 
 pyautogui.FAILSAFE = True
 
@@ -474,6 +474,8 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     random_a_sent = False
     multi_d_sent = False
     result_d_sent = False
+    mystery_d_sent = False
+    mystery_confirm_d_sent = False
     esc_started: float | None = None
     while True:
         if keyboard.is_pressed("esc"):
@@ -500,6 +502,9 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         coins_ready = coin_screen and double_coins_visible(frame)
         now = time.monotonic()
 
+        if not coins_ready:
+            double_coins_ready_since = None
+
         # Gameplay has priority over every menu/result detector. Space is
         # mapped to the centre tap and handles gameplay and Boost screens.
         if (
@@ -520,6 +525,8 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             random_a_sent = False
             multi_d_sent = False
             result_d_sent = False
+            mystery_d_sent = False
+            mystery_confirm_d_sent = False
             if now - last_click >= CLICK_COOLDOWN:
                 print("Main Play screen found; pressing S")
                 pyautogui.press("s")
@@ -537,11 +544,17 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         elif (
             VERIFY_THROUGH_STEP >= 5
             and coins_ready
-            and now - last_click >= CLICK_COOLDOWN
         ):
-            print("Double Coins ready; pressing S")
-            pyautogui.press("s")
-            last_click = now
+            if double_coins_ready_since is None:
+                double_coins_ready_since = now
+                print("Double Coins found; waiting 3 seconds before pressing S")
+            elif (
+                now - double_coins_ready_since >= COIN_PLAY_DELAY_SECONDS
+                and now - last_click >= CLICK_COOLDOWN
+            ):
+                print("Double Coins ready; pressing S")
+                pyautogui.press("s")
+                last_click = now
         elif (
             VERIFY_THROUGH_STEP >= 3
             and random_boost_screen
@@ -572,6 +585,27 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             pyautogui.press("d")
             last_click = now
             result_d_sent = True
+        elif (
+            VERIFY_THROUGH_STEP >= 9
+            and open_all_found
+            and not mystery_d_sent
+            and now - last_click >= CLICK_COOLDOWN
+        ):
+            print("Mystery Box found; pressing D to Open all")
+            pyautogui.press("d")
+            last_click = now
+            mystery_d_sent = True
+        elif (
+            VERIFY_THROUGH_STEP >= 9
+            and open_all_found
+            and mystery_d_sent
+            and not mystery_confirm_d_sent
+            and now - last_click >= CLICK_COOLDOWN
+        ):
+            print("Mystery Box rewards found; pressing D to Confirm")
+            pyautogui.press("d")
+            last_click = now
+            mystery_confirm_d_sent = True
         elif VERIFY_THROUGH_STEP:
             # Step-by-step verification mode: intentionally do nothing after
             # the latest enabled step.
@@ -590,7 +624,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             if coins_ready and coin_stage == "waiting_for_double_coins":
                 if double_coins_ready_since is None:
                     double_coins_ready_since = now
-                    print("Double Coins found; waiting 1 second before pressing S.")
+                    print("Double Coins found; waiting 3 seconds before pressing S.")
                 elif now - double_coins_ready_since >= COIN_PLAY_DELAY_SECONDS:
                     print("Double Coins ready; pressing S")
                     pyautogui.press("s")
