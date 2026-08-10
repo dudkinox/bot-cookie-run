@@ -62,3 +62,7 @@ python color_finder.py
 
 ## 📝 License
 MIT License - ใช้เพื่อการศึกษาเท่านั้น
+
+
+$env:QT_QPA_PLATFORM_PLUGIN_PATH="$PWD\runtime\qt_plugins\platforms"
+pyw -m meccha_chameleon_tools

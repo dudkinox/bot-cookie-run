@@ -21,11 +21,13 @@ import pyautogui
 APP_DIR = Path(__file__).resolve().parent
 CONFIG_FILE = APP_DIR / "auto_run_config.json"
 PLAY_TEMPLATE_FILE = APP_DIR / "play_button.png"
+CARD_TEMPLATE_DIR = APP_DIR / "card"
 
 # Position of the Play button in the supplied 1065x599 reference image.
 # A little padding is included so template matching also sees its border.
 PLAY_BOX = (0.585, 0.817, 0.915, 0.960)  # left, top, right, bottom
 MATCH_THRESHOLD = 0.72
+CARD_MATCH_THRESHOLD = 0.86
 CHECK_INTERVAL = 0.5
 CLICK_COOLDOWN = 1.0
 GAME_CLICK_INTERVAL = 0.5
@@ -434,6 +436,50 @@ def relative_point(
         region[1] + round(region[3] * y_ratio),
     )
 
+
+def load_card_templates() -> list[tuple[str, np.ndarray]]:
+    """Load every PNG/JPG reference image from the card directory."""
+    templates: list[tuple[str, np.ndarray]] = []
+    if not CARD_TEMPLATE_DIR.is_dir():
+        return templates
+
+    for path in sorted(CARD_TEMPLATE_DIR.iterdir()):
+        if path.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            continue
+        template = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if template is not None and template.size:
+            templates.append((path.name, template))
+    return templates
+
+
+def find_wanted_card(
+    frame: np.ndarray, templates: list[tuple[str, np.ndarray]]
+) -> tuple[float, tuple[int, int], str]:
+    """Return the best matching wanted-card score, centre, and filename."""
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    best_score = 0.0
+    best_centre = (0, 0)
+    best_name = ""
+
+    for name, template in templates:
+        template_height, template_width = template.shape[:2]
+        if (
+            template_height > gray_frame.shape[0]
+            or template_width > gray_frame.shape[1]
+        ):
+            continue
+        result = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(result)
+        if score > best_score:
+            best_score = float(score)
+            best_centre = (
+                location[0] + template_width // 2,
+                location[1] + template_height // 2,
+            )
+            best_name = name
+    return best_score, best_centre, best_name
+
+
 def find_play(frame: np.ndarray, template: np.ndarray) -> tuple[float, tuple[int, int], str]:
     """Return confidence, Play centre, and the detector that found it."""
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -463,6 +509,9 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     if template is None:
         raise SystemExit("Play template is missing. Run: python auto_run.py --reset")
 
+    card_templates = load_card_templates()
+    print(f"Loaded {len(card_templates)} wanted card image(s).")
+
     print("Watching for the Play screen. Hold ESC for 0.5 seconds to stop.")
     last_click = 0.0
     game_clicking = False
@@ -476,6 +525,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     result_d_sent = False
     mystery_d_sent = False
     mystery_confirm_d_sent = False
+    wanted_card_latched = False
     esc_started: float | None = None
     while True:
         if keyboard.is_pressed("esc"):
@@ -488,6 +538,8 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             esc_started = None
 
         frame = screenshot_bgr(region)
+        card_score, card_centre, card_name = find_wanted_card(frame, card_templates)
+        wanted_card_found = card_score >= CARD_MATCH_THRESHOLD
         score, centre, detector = find_play(frame, template)
         result_found, ok_centre = find_result_ok(frame)
         open_all_found, open_all_centre = find_open_all(frame)
@@ -505,9 +557,27 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         if not coins_ready:
             double_coins_ready_since = None
 
-        # Gameplay has priority over every menu/result detector. Space is
-        # mapped to the centre tap and handles gameplay and Boost screens.
-        if (
+        # Wanted cards have top priority. Latching prevents repeated clicks
+        # while the same card remains visible; it rearms after it disappears.
+        if wanted_card_found:
+            if not wanted_card_latched and now - last_click >= CLICK_COOLDOWN:
+                screen_x = region[0] + card_centre[0]
+                screen_y = region[1] + card_centre[1]
+                print(
+                    f"Wanted card found ({card_name}, {card_score:.2f}); "
+                    f"clicking at {screen_x}, {screen_y}"
+                )
+                pyautogui.click(screen_x, screen_y)
+                last_click = now
+                wanted_card_latched = True
+        else:
+            wanted_card_latched = False
+
+        # Gameplay has priority over every other menu/result detector. Space
+        # is mapped to the centre tap and handles gameplay and Boost screens.
+        if wanted_card_found:
+            pass
+        elif (
             VERIFY_THROUGH_STEP >= 7
             and gameplay_heart_found
             and now - last_click >= GAME_CLICK_INTERVAL
@@ -704,7 +774,9 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         if show_preview:
             preview = frame.copy()
             color = (0, 255, 0) if (game_clicking or score >= MATCH_THRESHOLD) else (0, 0, 255)
-            if result_found:
+            if wanted_card_found:
+                mode = f"CARD: {card_name} ({card_score:.2f})"
+            elif result_found:
                 mode = "RESULT: clicking OK"
             elif open_all_found:
                 action_name = "Confirm" if mystery_opened else "Open all"
