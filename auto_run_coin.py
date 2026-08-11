@@ -452,12 +452,14 @@ def load_card_templates() -> list[tuple[str, np.ndarray]]:
     return templates
 
 
-def find_wanted_cards(
+def find_wanted_card(
     frame: np.ndarray, templates: list[tuple[str, np.ndarray]]
-) -> list[tuple[float, tuple[int, int], str]]:
-    """Return every wanted-card template currently visible in the frame."""
+) -> tuple[float, tuple[int, int], str]:
+    """Return the best matching wanted-card score, centre, and filename."""
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    matches: list[tuple[float, tuple[int, int], str]] = []
+    best_score = 0.0
+    best_centre = (0, 0)
+    best_name = ""
 
     for name, template in templates:
         template_height, template_width = template.shape[:2]
@@ -468,14 +470,14 @@ def find_wanted_cards(
             continue
         result = cv2.matchTemplate(gray_frame, template, cv2.TM_CCOEFF_NORMED)
         _, score, _, location = cv2.minMaxLoc(result)
-        if score >= CARD_MATCH_THRESHOLD:
-            centre = (
+        if score > best_score:
+            best_score = float(score)
+            best_centre = (
                 location[0] + template_width // 2,
                 location[1] + template_height // 2,
             )
-            matches.append((float(score), centre, name))
-
-    return sorted(matches, reverse=True)
+            best_name = name
+    return best_score, best_centre, best_name
 
 
 def find_play(frame: np.ndarray, template: np.ndarray) -> tuple[float, tuple[int, int], str]:
@@ -523,7 +525,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
     result_d_sent = False
     mystery_d_sent = False
     mystery_confirm_d_sent = False
-    clicked_card_names: set[str] = set()
+    wanted_card_latched = False
     esc_started: float | None = None
     while True:
         if keyboard.is_pressed("esc"):
@@ -536,14 +538,8 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             esc_started = None
 
         frame = screenshot_bgr(region)
-        card_matches = find_wanted_cards(frame, card_templates)
-        wanted_card_found = bool(card_matches)
-        visible_card_names = {name for _, _, name in card_matches}
-        clicked_card_names.intersection_update(visible_card_names)
-        next_card = next(
-            (match for match in card_matches if match[2] not in clicked_card_names),
-            None,
-        )
+        card_score, card_centre, card_name = find_wanted_card(frame, card_templates)
+        wanted_card_found = card_score >= CARD_MATCH_THRESHOLD
         score, centre, detector = find_play(frame, template)
         result_found, ok_centre = find_result_ok(frame)
         open_all_found, open_all_centre = find_open_all(frame)
@@ -561,11 +557,10 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
         if not coins_ready:
             double_coins_ready_since = None
 
-        # Wanted cards have top priority. Click one new match per scan so the
-        # screen can update safely, then continue with the remaining matches.
-        if next_card is not None:
-            if now - last_click >= CLICK_COOLDOWN:
-                card_score, card_centre, card_name = next_card
+        # Wanted cards have top priority. Latching prevents repeated clicks
+        # while the same card remains visible; it rearms after it disappears.
+        if wanted_card_found:
+            if not wanted_card_latched and now - last_click >= CLICK_COOLDOWN:
                 screen_x = region[0] + card_centre[0]
                 screen_y = region[1] + card_centre[1]
                 print(
@@ -574,7 +569,9 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
                 )
                 pyautogui.click(screen_x, screen_y)
                 last_click = now
-                clicked_card_names.add(card_name)
+                wanted_card_latched = True
+        else:
+            wanted_card_latched = False
 
         # Gameplay has priority over every other menu/result detector. Space
         # is mapped to the centre tap and handles gameplay and Boost screens.
@@ -778,8 +775,7 @@ def run(region: tuple[int, int, int, int], show_preview: bool = False) -> None:
             preview = frame.copy()
             color = (0, 255, 0) if (game_clicking or score >= MATCH_THRESHOLD) else (0, 0, 255)
             if wanted_card_found:
-                card_score, _, card_name = card_matches[0]
-                mode = f"CARDS: {len(card_matches)}; best {card_name} ({card_score:.2f})"
+                mode = f"CARD: {card_name} ({card_score:.2f})"
             elif result_found:
                 mode = "RESULT: clicking OK"
             elif open_all_found:
